@@ -10,15 +10,20 @@ AIWebPOS is a modular, AI-powered POS platform designed for retail and enterpris
 Category	Description
 
 🛍️ POS Interface	Fast, intuitive UI (touchscreen & barcode-ready) built with Next.js
+
 🔄 Online/Offline Mode	Ensures business continuity without internet
+
 🌐 Remote Management	Full control of branches, inventory, analytics & users remotely
+
 📦 Supply Chain	Track orders, stock levels, vendors, and shipments
+
 💵 Finance & Payments	Built-in gateway, 200105876-3 tax support, debts, market value, AR/AP
+
 📊 Analytics & AI	Python-powered modules for trends, pricing, fraud detection, demand planning
+
 👥 HR & Employees	Time tracking, payroll, roles, KPIs
+
 ⚙️ Microservice Design	Every module is an independent microservice sharing data via APIs
-
-
 
 ---
 
@@ -27,11 +32,17 @@ Category	Description
 Layer	Technology Used
 
 🖼️ Frontend UI	Next.js, TailwindCSS
+
 🧠 AI & Analytics	Python, scikit-learn, pandas, NumPy
+
 🔌 Backend API	Django Rest Framework (DRF)
+
 🗃️ Database	PostgreSQL / MS SQL Server
+
 🔐 Auth & Access	DRF JWT + Role-based access
+
 📡 Integrations	External APIs (payment, logistics, tax, etc.)
+
 ☁️ Hosting	Flexible: AWS, DigitalOcean, Vercel, Docker
 
 
