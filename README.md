@@ -1,6 +1,4 @@
-Here’s a polished, updated README reflecting your detailed AIWebPOS system, ready for your GitHub or docs site:
 
----
 
 # 📦 AIWebPOS - Smart, Scalable Point of Sale System
 
@@ -165,6 +163,4 @@ Please follow the contribution guidelines and submit PRs to the `dev` branch.
 
 MIT License – © 2025 \[[www.codeburst.co.ls](http://www.codeburst.co.ls)]
 
----
 
-If you want me to help with README badges, example `.env` files, or more detailed developer workflows, just say!
