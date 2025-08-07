@@ -1,36 +1,30 @@
 from django.db import models
+from django.contrib.auth.models import AbstractUser
 from django.conf import settings
 
-
-# ----------------------------
-# Tenant (multi-instance / multi-tenant)
-# ----------------------------
-
+# Tenant model as you had it
 class Tenant(models.Model):
     name = models.CharField(max_length=150, unique=True)
-    domain = models.CharField(max_length=255, blank=True, null=True)  # Optional domain
+    domain = models.CharField(max_length=255, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return self.name
 
 
-# ----------------------------
-# User & Roles
-# ----------------------------
-
-class User(models.Model):
+# Custom User model inheriting from AbstractUser
+class User(AbstractUser):
     ROLE_CHOICES = (
         ('cashier', 'Cashier'),
         ('manager', 'Manager'),
         ('admin', 'Admin'),
     )
+
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='users')
-    username = models.CharField(max_length=150)
-    email = models.EmailField(blank=True, null=True)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='cashier')
-    is_active = models.BooleanField(default=True)
-    date_joined = models.DateTimeField(auto_now_add=True)
+
+    # username, email, password, is_active, is_staff, is_superuser, last_login, date_joined
+    # fields come from AbstractUser
 
     def __str__(self):
         return f"{self.username} ({self.role})"
