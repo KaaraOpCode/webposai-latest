@@ -1,177 +1,296 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
-from django.conf import settings
+from django.utils import timezone
 
-# Tenant model as you had it
+
+# ===== TENANT =====
+
 class Tenant(models.Model):
-    name = models.CharField(max_length=150, unique=True)
-    domain = models.CharField(max_length=255, blank=True, null=True)
+    name = models.CharField(max_length=255)
+    address = models.TextField(blank=True)
+    phone = models.CharField(max_length=20, blank=True)
+    email = models.EmailField(blank=True)
+    tax_certificate = models.FileField(upload_to='tenant_docs/', blank=True, null=True)
+    business_license = models.FileField(upload_to='tenant_docs/', blank=True, null=True)
+    subscription_plan = models.CharField(max_length=100, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.name
 
 
-# Custom User model inheriting from AbstractUser
+# ===== USER =====
+
 class User(AbstractUser):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='users')
+    profile_picture = models.ImageField(upload_to='profiles/', blank=True, null=True)
     ROLE_CHOICES = (
         ('cashier', 'Cashier'),
         ('manager', 'Manager'),
         ('admin', 'Admin'),
+        ('customer', 'Customer'),
+        ('supplier', 'Supplier'),
+        ('employee', 'Employee'),
     )
-
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='users')
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='cashier')
-
-    # username, email, password, is_active, is_staff, is_superuser, last_login, date_joined
-    # fields come from AbstractUser
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='employee')
+    last_login = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.username} ({self.role})"
 
 
-# ----------------------------
-# Store (Physical or Online)
-# ----------------------------
+# ===== STORE =====
 
 class Store(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='stores')
-    STORE_TYPE_CHOICES = (
-        ('physical', 'Physical'),
-        ('online', 'Online'),
-    )
     name = models.CharField(max_length=100)
-    location = models.CharField(max_length=200, blank=True, null=True)
-    store_type = models.CharField(max_length=20, choices=STORE_TYPE_CHOICES, default='physical')
+    location = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.name} ({self.store_type})"
+        return f"{self.name} - {self.location}"
 
 
-# ----------------------------
-# Product Categories
-# ----------------------------
+# ===== CATEGORY (For Products and Services) =====
 
-class ProductCategory(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='product_categories')
+class Category(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='categories')
     name = models.CharField(max_length=100)
-    description = models.TextField(blank=True, null=True)
+    description = models.TextField(blank=True)
 
     def __str__(self):
         return self.name
 
 
-# ----------------------------
-# Service Categories
-# ----------------------------
-
-class ServiceCategory(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='service_categories')
-    name = models.CharField(max_length=100)
-    description = models.TextField(blank=True, null=True)
-
-    def __str__(self):
-        return self.name
-
-
-# ----------------------------
-# Products
-# ----------------------------
+# ===== PRODUCT =====
 
 class Product(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='products')
-    name = models.CharField(max_length=100)
-    sku = models.CharField(max_length=30, unique=True)
-    barcode = models.CharField(max_length=50, blank=True, null=True)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
-    category = models.ForeignKey(ProductCategory, on_delete=models.SET_NULL, null=True, related_name='products')
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='products')
+    category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, related_name='products')
+    name = models.CharField(max_length=255)
+    sku = models.CharField(max_length=50, unique=True)
+    barcode = models.CharField(max_length=50, unique=True)
+    description = models.TextField(blank=True)
+    price = models.DecimalField(max_digits=12, decimal_places=2)
+    cost_price = models.DecimalField(max_digits=12, decimal_places=2)
+    quantity = models.IntegerField(default=0)
+    expiry_date = models.DateField(blank=True, null=True)
+
+    # Damaged / Discounted / Surplus / PCU / Virtual flags
+    is_damaged = models.BooleanField(default=False)
+    damaged_quantity = models.PositiveIntegerField(default=0)
+    is_discounted = models.BooleanField(default=False)
+    discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    surplus_quantity = models.PositiveIntegerField(default=0)
+    supply_pcu = models.PositiveIntegerField(default=1, help_text="Units per counting unit (e.g., pack size)")
+
+    is_virtual = models.BooleanField(default=False)
+    validity_days = models.PositiveIntegerField(blank=True, null=True)
+    max_redemptions = models.PositiveIntegerField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def discounted_price(self):
+        if self.is_discounted and self.discount_percent > 0:
+            return self.price * (1 - self.discount_percent / 100)
+        return self.price
 
     def __str__(self):
         return f"{self.name} ({self.sku})"
 
 
-# ----------------------------
-# Services
-# ----------------------------
+# ===== VIRTUAL PRODUCT DETAILS =====
+
+class VirtualProduct(models.Model):
+    VIRTUAL_TYPES = [
+        ('airtime', 'Airtime'),
+        ('voucher', 'Voucher'),
+        ('electricity', 'Electricity'),
+        ('data_bundle', 'Data Bundle'),
+        ('subscription', 'Subscription'),
+        ('other', 'Other'),
+    ]
+
+    product = models.OneToOneField(Product, on_delete=models.CASCADE, related_name='virtual_details')
+    virtual_type = models.CharField(max_length=50, choices=VIRTUAL_TYPES)
+    provider_name = models.CharField(max_length=255, blank=True)
+    denomination = models.DecimalField(max_digits=12, decimal_places=2, blank=True, null=True)
+    validity_period_days = models.PositiveIntegerField(blank=True, null=True)
+    terms_and_conditions = models.TextField(blank=True)
+
+    def __str__(self):
+        return f"{self.virtual_type.capitalize()} for {self.product.name}"
+
+
+# ===== SERVICE =====
 
 class Service(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='services')
-    name = models.CharField(max_length=100)
-    description = models.TextField(blank=True, null=True)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
-    category = models.ForeignKey(ServiceCategory, on_delete=models.SET_NULL, null=True, related_name='services')
+    category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, related_name='services')
+    name = models.CharField(max_length=255)
+    price = models.DecimalField(max_digits=12, decimal_places=2)
+    description = models.TextField(blank=True)
+    duration_minutes = models.PositiveIntegerField(default=30)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return self.name
 
 
-# ----------------------------
-# Customers
-# ----------------------------
+# ===== CUSTOMER =====
 
 class Customer(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='customers')
-    name = models.CharField(max_length=100)
+    user = models.OneToOneField(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='customer_profile')
+    name = models.CharField(max_length=255)
     email = models.EmailField(blank=True, null=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
+    address = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return self.name
 
 
-# ----------------------------
-# Orders
-# ----------------------------
+# ===== CONTRACTS (Employee, Supplier, Customer) =====
 
-class Order(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='orders')
-    customer = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, related_name='orders')
-    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='orders')
-    status = models.CharField(max_length=20, choices=(
-        ('pending', 'Pending'),
-        ('completed', 'Completed'),
-        ('cancelled', 'Cancelled'),
-    ), default='pending')
+class Contract(models.Model):
+    CONTRACT_TYPES = (
+        ('employee', 'Employee'),
+        ('supplier', 'Supplier'),
+        ('customer', 'Customer'),
+    )
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='contracts')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, blank=True, null=True, related_name='contracts')
+    contract_file = models.FileField(upload_to='contracts/')
+    contract_type = models.CharField(max_length=20, choices=CONTRACT_TYPES)
+    start_date = models.DateField()
+    end_date = models.DateField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.contract_type.title()} Contract ({self.user})"
+
+
+# ===== VENDOR =====
+
+class Vendor(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='vendors')
+    name = models.CharField(max_length=255)
+    contact_person = models.CharField(max_length=255, blank=True)
+    phone = models.CharField(max_length=20)
+    email = models.EmailField()
+    address = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+
+# ===== PURCHASE =====
+
+class Purchase(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='purchases')
+    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name='purchases')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='purchases')
+    quantity = models.PositiveIntegerField()
+    total_cost = models.DecimalField(max_digits=12, decimal_places=2)
+    purchased_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Purchase {self.quantity} of {self.product.name} from {self.vendor.name}"
+
+
+# ===== INVENTORY =====
+
+class Inventory(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='inventories')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='inventories')
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='inventories')
+    quantity = models.IntegerField(default=0)
+    minimum_stock_level = models.PositiveIntegerField(default=5)
+    last_updated = models.DateTimeField(auto_now=True)
+
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_inventories')
+    updated_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='updated_inventories')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        unique_together = ('tenant', 'product', 'store')
+
     def __str__(self):
-        return f"Order #{self.id} - {self.status}"
+        return f"{self.product.name} at {self.store.name} — {self.quantity}"
 
 
-# ----------------------------
-# Sales and Sale Items
-# ----------------------------
+class InventoryTransaction(models.Model):
+    TRANSACTION_TYPES = (
+        ('restock', 'Restock'),
+        ('sale', 'Sale'),
+        ('adjustment', 'Adjustment'),
+        ('transfer_in', 'Transfer In'),
+        ('transfer_out', 'Transfer Out'),
+        ('damage', 'Damage'),
+        ('surplus', 'Surplus'),
+    )
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='inventory_transactions')
+    inventory = models.ForeignKey(Inventory, on_delete=models.CASCADE, related_name='transactions')
+    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPES)
+    quantity = models.IntegerField()
+    timestamp = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True, null=True)
+
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_inventory_transactions')
+
+    def __str__(self):
+        return f"{self.transaction_type} {self.quantity} of {self.inventory.product.name} at {self.inventory.store.name}"
+
+
+# ===== SURPLUS SUPPLY =====
+
+class SurplusSupply(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='surplus_supplies')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='surplus_supplies')
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='surplus_supplies')
+    quantity = models.PositiveIntegerField()
+    recorded_at = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return f"Surplus {self.quantity} of {self.product.name} at {self.store.name}"
+
+
+# ===== SALE =====
 
 class Sale(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='sales')
-    order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True, related_name='sales')
-    timestamp = models.DateTimeField(auto_now_add=True)
-    cashier = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='sales')
     store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='sales')
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='sales')
     customer = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, blank=True, related_name='sales')
-    total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    payment_method = models.CharField(max_length=50, default='cash')  # simplified
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    date = models.DateTimeField(default=timezone.now)
 
     def __str__(self):
-        return f"Sale #{self.id} - {self.timestamp.date()}"
+        return f"Sale #{self.id} - {self.total_amount}"
 
 
-class SaleItem(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='sale_items')
-    sale = models.ForeignKey(Sale, related_name='items', on_delete=models.CASCADE)
-    product = models.ForeignKey(Product, null=True, blank=True, on_delete=models.SET_NULL, related_name='sale_items')
-    service = models.ForeignKey(Service, null=True, blank=True, on_delete=models.SET_NULL, related_name='sale_items')
-    quantity = models.PositiveIntegerField(default=1)
-    subtotal = models.DecimalField(max_digits=10, decimal_places=2)
+class OrderItem(models.Model):
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True)
+    service = models.ForeignKey(Service, on_delete=models.SET_NULL, null=True, blank=True)
+    quantity = models.PositiveIntegerField()
+    price = models.DecimalField(max_digits=12, decimal_places=2)
 
     def clean(self):
         from django.core.exceptions import ValidationError
         if not self.product and not self.service:
-            raise ValidationError("SaleItem must have either a product or a service.")
+            raise ValidationError("OrderItem must have either a product or a service.")
         if self.product and self.service:
-            raise ValidationError("SaleItem cannot have both a product and a service.")
+            raise ValidationError("OrderItem cannot have both a product and a service.")
 
     def __str__(self):
         if self.product:
@@ -180,218 +299,184 @@ class SaleItem(models.Model):
             return f"{self.service.name} x {self.quantity}"
 
 
-# ----------------------------
-# Inventory
-# ----------------------------
-
-class Inventory(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='inventories')
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='inventories')
-    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='inventories')
-    quantity = models.PositiveIntegerField(default=0)
-    minimum_stock_level = models.PositiveIntegerField(default=5)
-    last_updated = models.DateTimeField(auto_now=True)
-
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
-                                   on_delete=models.SET_NULL, related_name='created_inventories')
-    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
-                                   on_delete=models.SET_NULL, related_name='updated_inventories')
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        unique_together = ('tenant', 'product', 'store')
-
-    def __str__(self):
-        return f"Inventory: {self.product.name} at {self.store.name} — {self.quantity}"
-
-
-class InventoryTransaction(models.Model):
-    TRANSACTION_TYPES = (
-        ('purchase', 'Purchase'),
-        ('sale', 'Sale'),
-        ('adjustment', 'Adjustment'),
-        ('transfer_in', 'Transfer In'),
-        ('transfer_out', 'Transfer Out'),
-    )
-
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='inventory_transactions')
-    inventory = models.ForeignKey(Inventory, on_delete=models.CASCADE, related_name='transactions')
-    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPES)
-    quantity = models.IntegerField()  # positive or negative depending on transaction type
-    timestamp = models.DateTimeField(auto_now_add=True)
-    notes = models.TextField(blank=True, null=True)
-
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
-                                   on_delete=models.SET_NULL, related_name='created_inventory_transactions')
-
-    def __str__(self):
-        return (f"{self.transaction_type} of {self.quantity} for "
-                f"{self.inventory.product.name} at {self.inventory.store.name} on {self.timestamp:%Y-%m-%d %H:%M}")
-
-    class Meta:
-        ordering = ['-timestamp']
-
-
-# ----------------------------
-# Market Till
-# ----------------------------
-
-class MarketTill(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='market_tills')
-    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='market_tills')
-    opening_balance = models.DecimalField(max_digits=10, decimal_places=2)
-    closing_balance = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
-    opened_at = models.DateTimeField(auto_now_add=True)
-    closed_at = models.DateTimeField(blank=True, null=True)
-    is_open = models.BooleanField(default=True)
-
-    def __str__(self):
-        return f"Till for {self.store.name} ({'Open' if self.is_open else 'Closed'})"
-
-
-# ----------------------------
-# Transactions
-# ----------------------------
-
-class Transaction(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='transactions')
-    sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name='transactions')
-    TRANSACTION_TYPES = (
-        ('payment', 'Payment'),
-        ('refund', 'Refund'),
-    )
-    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPES, default='payment')
-    amount = models.DecimalField(max_digits=12, decimal_places=2)
-    timestamp = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"{self.transaction_type.capitalize()} of ${self.amount} for Sale #{self.sale.id}"
-
-
-# ----------------------------
-# Payments
-# ----------------------------
+# ===== PAYMENT =====
 
 class Payment(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='payments')
-    transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE)
     PAYMENT_METHODS = (
         ('cash', 'Cash'),
         ('card', 'Card'),
         ('mobile', 'Mobile Money'),
-        ('bank', 'Bank Transfer'),
+        ('bank_transfer', 'Bank Transfer'),
+        ('credit', 'Credit'),
     )
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='payments')
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name='payments')
     method = models.CharField(max_length=20, choices=PAYMENT_METHODS)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
     reference = models.CharField(max_length=100, blank=True, null=True)
-    amount = models.DecimalField(max_digits=12, decimal_places=2)  # Total payment amount
-    commission_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    date = models.DateTimeField(auto_now_add=True)
 
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
-                                   on_delete=models.SET_NULL, related_name='created_payments')
-    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
-                                   on_delete=models.SET_NULL, related_name='updated_payments')
+    created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_payments')
+    updated_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='updated_payments')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.method.capitalize()} payment of ${self.amount}"
+        return f"{self.method} payment of {self.amount}"
 
 
-# ----------------------------
-# Commissions
-# ----------------------------
+# ===== REFUND =====
 
-class Commission(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='commissions')
-    payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name='commissions')
+class Refund(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='refunds')
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name='refunds')
+    reason = models.TextField()
     amount = models.DecimalField(max_digits=12, decimal_places=2)
-    description = models.TextField(blank=True, null=True)
-
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
-                                   on_delete=models.SET_NULL, related_name='created_commissions')
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"Commission of ${self.amount} for Payment #{self.payment.id}"
+        return f"Refund {self.amount} for Sale #{self.sale.id}"
 
 
-# ----------------------------
-# Delivery (Local or Remote)
-# ----------------------------
+# ===== GIFT CARD =====
 
-class Delivery(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='deliveries')
-    DELIVERY_TYPE_CHOICES = (
-        ('local', 'Local'),
-        ('remote', 'Remote'),
-    )
-    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='deliveries')
-    delivery_type = models.CharField(max_length=20, choices=DELIVERY_TYPE_CHOICES)
-    delivered_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='deliveries')
-    delivery_date = models.DateTimeField(blank=True, null=True)
-    tracking_number = models.CharField(max_length=100, blank=True, null=True)
-    delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+class GiftCard(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='giftcards')
+    code = models.CharField(max_length=100, unique=True)
+    initial_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    current_balance = models.DecimalField(max_digits=12, decimal_places=2)
+    issued_to = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, blank=True, related_name='giftcards')
+    issued_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='issued_giftcards')
+    issued_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+
+    def redeem(self, amount):
+        if amount <= self.current_balance:
+            self.current_balance -= amount
+            self.save()
+            return True
+        return False
 
     def __str__(self):
-        return f"Delivery #{self.id} for Order #{self.order.id} ({self.delivery_type})"
+        return f"GiftCard {self.code} - Balance: {self.current_balance}"
 
 
-# ----------------------------
-# Promotions
-# ----------------------------
+# ===== PROMOTION =====
 
 class Promotion(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='promotions')
     code = models.CharField(max_length=50, unique=True)
-    description = models.TextField(blank=True, null=True)
+    description = models.TextField(blank=True)
     discount_percent = models.DecimalField(max_digits=5, decimal_places=2)
-    start_date = models.DateTimeField()
-    end_date = models.DateTimeField()
+    start_date = models.DateField()
+    end_date = models.DateField()
     active = models.BooleanField(default=True)
 
     def __str__(self):
         return f"Promo {self.code} ({self.discount_percent}%)"
 
 
-# ----------------------------
-# Taxes
-# ----------------------------
+# ===== TAX =====
 
 class Tax(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='taxes')
     name = models.CharField(max_length=100)
     percentage = models.DecimalField(max_digits=5, decimal_places=2)
-    description = models.TextField(blank=True, null=True)
-    active = models.BooleanField(default=True)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
 
     def __str__(self):
         return f"{self.name} ({self.percentage}%)"
 
 
-# ----------------------------
-# Inventory Alerts
-# ----------------------------
+# ===== DELIVERY =====
 
-class InventoryAlert(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='inventory_alerts')
-    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+class Delivery(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='deliveries')
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name='deliveries')
+    delivery_type = models.CharField(max_length=20, choices=(('local', 'Local'), ('remote', 'Remote')))
+    delivered_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='deliveries')
+    delivery_date = models.DateTimeField(blank=True, null=True)
+    tracking_number = models.CharField(max_length=100, blank=True, null=True)
+    delivery_fee = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    def __str__(self):
+        return f"Delivery #{self.id} for Sale #{self.sale.id}"
+
+
+# ===== LOYALTY POINTS =====
+
+class LoyaltyPoint(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='loyalty_points')
+    points = models.IntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.username} - {self.points} pts"
+
+
+# ===== JOURNAL ENTRY =====
+
+class JournalEntry(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='journal_entries')
+    description = models.TextField()
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    entry_date = models.DateField(default=timezone.now)
+
+    def __str__(self):
+        return f"JournalEntry on {self.entry_date} - {self.amount}"
+
+
+# ===== SHIFT =====
+
+class Shift(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='shifts')
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='shifts')
+    start_time = models.DateTimeField()
+    end_time = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    resolved = models.BooleanField(default=False)
 
     def __str__(self):
-        return f"Alert: {self.product.name} below threshold"
+        return f"{self.user.username} Shift at {self.store.name}"
 
 
-# ----------------------------
-# Receipt PDF Record
-# ----------------------------
+# ===== COMMISSION =====
 
-class Receipt(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='receipts')
-    sale = models.OneToOneField(Sale, on_delete=models.CASCADE, related_name='receipt')
-    pdf_file = models.FileField(upload_to='receipts/')
-    generated_at = models.DateTimeField(auto_now_add=True)
+class Commission(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='commissions')
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name='commissions')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"Receipt for Sale #{self.sale.id}"
+        return f"Commission {self.amount} for {self.user.username}"
+
+
+# ===== KPI =====
+
+class KPI(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='kpis')
+    name = models.CharField(max_length=100)
+    value = models.DecimalField(max_digits=12, decimal_places=2)
+    calculated_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.name} - {self.value}"
+
+
+# ===== ACTION LOG =====
+# Logs any user action on models, especially for security/audit (e.g. fiddling accounts)
+
+class ActionLog(models.Model):
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='action_logs')
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='action_logs')
+    model_name = models.CharField(max_length=100)
+    object_id = models.CharField(max_length=100)
+    action_type = models.CharField(max_length=50)  # e.g. "create", "update", "delete", "login", "failed_login", "permission_change"
+    timestamp = models.DateTimeField(auto_now_add=True)
+    ip_address = models.GenericIPAddressField(blank=True, null=True)
+    details = models.TextField(blank=True)
+
+    def __str__(self):
+        return f"{self.timestamp} - {self.user} performed {self.action_type} on {self.model_name} ({self.object_id})"
